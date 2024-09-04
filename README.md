@@ -1,4 +1,4 @@
-![BOPIS app repo](Bopis-CoverImage.png)
+![BOPIS app repo](Bopis-CoverImage-Github.png)
 
 # Bopis App - Buy Online and Pickup at Store
 
