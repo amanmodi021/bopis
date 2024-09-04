@@ -1,10 +1,14 @@
 ![BOPIS app repo](Bopis-CoverImage.png)
 
+# Bopis App - Buy Online and Pickup at Store
+
+
+![Bopis](Bopis-Image.png)
 
 # Prerequisite
 Ionic CLI - If you don't have the ionic CLI installed refer [official documentation](https://ionicframework.com/docs/intro/cli) for the installation instructions.
 
-![Bopis](Bopis-Image.png)
+
 # Build Notes (Users)
 
 1. Download the app from [release](https://github.com/hotwax/bopis/releases) page and extract it.
