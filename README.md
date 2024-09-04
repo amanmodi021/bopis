@@ -1,4 +1,4 @@
-![BOPIS app repo](https://user-images.githubusercontent.com/41404838/146546714-f95c73f9-ad24-483d-b037-0f6c33aa27aa.png)
+![BOPIS app repo](Bopis-CoverImage.png)
 
 
 # Prerequisite
