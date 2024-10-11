@@ -3,7 +3,7 @@
 # Bopis App - Buy Online and Pickup at Store
 
 
-![Bopis](Bopis-Image.png)
+<!-- ![Bopis](Bopis-Image.png) -->
 
 # Prerequisite
 Ionic CLI - If you don't have the ionic CLI installed refer [official documentation](https://ionicframework.com/docs/intro/cli) for the installation instructions.
