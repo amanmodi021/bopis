@@ -120,6 +120,62 @@
             </div>
           </ion-card>
           <p v-if="!order.part?.items?.length" class="empty-state">{{ translate('All order items are rejected') }}</p>
+
+          <ion-accordion-group v-if="order.shipGroups?.length">
+            <ion-accordion>
+              <ion-item slot="header">
+                <ion-label>{{ translate("Other shipments in this order") }}</ion-label>
+              </ion-item>
+              <div class="ion-padding" slot="content">
+                <ion-card v-for="shipGroup in order.shipGroups" :key="shipGroup.shipmentId">
+                  <ion-card-header>
+                    <div>
+                      <ion-card-subtitle class="overline">{{ getfacilityTypeDesc(shipGroup.facilityTypeId) }}</ion-card-subtitle>
+                      <ion-card-title>{{ shipGroup.facilityName }}</ion-card-title>
+                      {{ shipGroup.shipGroupSeqId }}
+                    </div>
+                    <ion-badge :color="shipGroup.category ? 'primary' : 'medium'">{{ shipGroup.category ? shipGroup.category : translate('Pending allocation') }}</ion-badge>
+                  </ion-card-header>
+        
+                  <ion-item v-if="shipGroup.carrierPartyId">
+                    {{ getPartyName(shipGroup.carrierPartyId) }}
+                    <ion-label slot="end">{{ shipGroup.trackingCode }}</ion-label>
+                    <ion-icon slot="end" :icon="locateOutline" />
+                  </ion-item>
+        
+                  <ion-item v-if="shipGroup.shippingInstructions" color="light" lines="none">
+                    <ion-label class="ion-text-wrap">
+                      <p class="overline">{{ translate("Handling Instructions") }}</p>
+                      <p>{{ shipGroup.shippingInstructions }}</p>
+                    </ion-label>
+                  </ion-item>
+        
+                  <ion-item lines="none" v-for="item in shipGroup.items" :key="item">
+                    <ion-thumbnail slot="start">
+                      <DxpShopifyImg :src="getProduct(item.productId).mainImageUrl" size="small"/>
+                    </ion-thumbnail>
+                    <ion-label class="ion-text-wrap">
+                      <h2>{{ getProductIdentificationValue(productIdentificationPref.primaryId, getProduct(item.productId)) ? getProductIdentificationValue(productIdentificationPref.primaryId, getProduct(item.productId)) : getProduct(item.productId).productName }}</h2>
+                      <p class="ion-text-wrap">{{ getProductIdentificationValue(productIdentificationPref.secondaryId, getProduct(item.productId)) }}</p>
+                    </ion-label>
+
+                    <div slot="end">
+                      <ion-spinner v-if="item.isFetchingStock" color="medium" name="crescent" />
+                      <div v-else-if="getProductStock(item.productId).quantityOnHandTotal >= 0" class="atp-info">
+                        <ion-note slot="end"> {{ translate("on hand", { count: getProductStock(item.productId).quantityOnHandTotal ?? '0' }) }} </ion-note>
+                        <ion-button fill="clear" @click.stop="openInventoryDetailPopover($event, item)">
+                          <ion-icon slot="icon-only" :icon="informationCircleOutline" color="medium" />
+                        </ion-button>
+                      </div>
+                      <ion-button v-else fill="clear" @click.stop="fetchProductStock(item.productId, shipGroup.shipGroupSeqId)">
+                        <ion-icon color="medium" slot="icon-only" :icon="cubeOutline" />
+                      </ion-button>
+                    </div>
+                  </ion-item>
+                </ion-card>
+              </div>
+            </ion-accordion>
+          </ion-accordion-group>
         </section>
       </main>
 
@@ -140,11 +196,16 @@
 <script lang="ts">
 import {
   alertController,
+  IonAccordion,
+  IonAccordionGroup,
   IonBackButton,
   IonBadge,
   IonButton,
   IonButtons,
   IonCard,
+  IonCardHeader,
+  IonCardSubtitle,
+  IonCardTitle,
   IonChip,
   IonContent,
   IonHeader,
@@ -153,14 +214,18 @@ import {
   IonList,
   IonPage,
   IonLabel,
+  IonNote,
   IonRow,
+  IonSpinner,
+  IonThumbnail,
   IonTitle,
   IonToolbar,
   IonFab,
   IonFabButton,
   modalController,
+  popoverController
 } from "@ionic/vue";
-import { defineComponent } from "vue";
+import { computed, defineComponent } from "vue";
 import { mapGetters, useStore } from "vuex";
 import {
   accessibilityOutline,
@@ -170,7 +235,10 @@ import {
   closeCircleOutline,
   checkmarkCircleOutline,
   checkmarkOutline,
+  cubeOutline,
   giftOutline,
+  informationCircleOutline,
+  locateOutline,
   mailOutline,
   printOutline,
   sendOutline,
@@ -184,24 +252,30 @@ import { Actions, hasPermission } from '@/authorization'
 import OrderItemRejHistoryModal from '@/components/OrderItemRejHistoryModal.vue';
 import ReportAnIssueModal from '@/components/ReportAnIssueModal.vue';
 import AssignPickerModal from "@/views/AssignPickerModal.vue";
-import { copyToClipboard, showToast } from '@/utils'
+import { copyToClipboard, getFeature, showToast } from '@/utils'
 import { DateTime } from "luxon";
 import { api, hasError } from '@/adapter';
 import { OrderService } from "@/services/OrderService";
 import RejectOrderModal from "@/components/RejectOrderModal.vue";
-import { translate } from "@hotwax/dxp-components";
+import { getProductIdentificationValue, translate, useProductIdentificationStore } from "@hotwax/dxp-components";
 import EditPickerModal from "@/components/EditPickerModal.vue";
 import emitter from '@/event-bus'
 import logger from "@/logger";
+import InventoryDetailsPopover from '@/components/InventoryDetailsPopover.vue'
 
 export default defineComponent({
   name: "OrderDetail",
   components: {
+    IonAccordion,
+    IonAccordionGroup,
     IonBackButton,
     IonBadge,
     IonButton,
     IonButtons,
     IonCard,
+    IonCardHeader,
+    IonCardSubtitle,
+    IonCardTitle,
     IonChip,
     IonContent,
     IonHeader,
@@ -210,7 +284,10 @@ export default defineComponent({
     IonList,
     IonPage,
     IonLabel,
+    IonNote,
     IonRow,
+    IonSpinner,
+    IonThumbnail,
     IonTitle,
     IonToolbar,
     ProductListItem,
@@ -241,15 +318,31 @@ export default defineComponent({
       getPaymentMethodDesc: 'util/getPaymentMethodDesc',
       getStatusDesc: 'util/getStatusDesc',
       showPackingSlip: 'user/showPackingSlip',
+      getProduct: 'product/getProduct',
+      getProductStock: 'stock/getProductStock',
+      getfacilityTypeDesc: 'util/getFacilityTypeDesc',
+      getPartyName: 'util/getPartyName',
     })
   },
   props: ['orderType', 'orderId', 'orderPartSeqId'],
   methods: {
+    async fetchProductStock(productId: string, shipGroupSeqId: any) {
+      this.store.dispatch('order/updateOrderItemFetchingStatus', { productId, shipGroupSeqId })
+      await this.store.dispatch('stock/fetchStock', { productId })
+      this.store.dispatch('order/updateOrderItemFetchingStatus', { productId, shipGroupSeqId })
+    },
     async assignPicker(order: any, part: any, facilityId: any) {
       const assignPickerModal = await modalController.create({
         component: AssignPickerModal,
         componentProps: { order, part, facilityId }
       });
+
+      assignPickerModal.onDidDismiss().then(async(result: any) => {
+        if(result.data.selectedPicker) {
+          await this.store.dispatch('order/packShipGroupItems', { order, part, facilityId, selectedPicker: result.data.selectedPicker })
+        }
+      })
+
       return assignPickerModal.present();
     },
     async editPicker(order: any) {
@@ -302,7 +395,7 @@ export default defineComponent({
       return rejectOrderModal.present();
     },
     async readyForPickup(order: any, part: any) {
-      if (this.configurePicker) return this.assignPicker(order, part, this.currentFacility.facilityId);
+      if(this.configurePicker && order.isPicked !== 'Y') return this.assignPicker(order, part, this.currentFacility.facilityId);
       const pickup = part?.shipmentMethodEnum?.shipmentMethodEnumId === 'STOREPICKUP';
       const header = pickup ? translate('Ready for pickup') : translate('Ready to ship');
       const message = pickup ? translate('An email notification will be sent to that their order is ready for pickup. This order will also be moved to the packed orders tab.', { customerName: order.customer.name, space: '<br/><br/>' }) : '';
@@ -317,11 +410,34 @@ export default defineComponent({
           }, {
             text: header,
             handler: async () => {
-              await this.store.dispatch('order/packShipGroupItems', { order: order, part: part, facilityId: this.currentFacility.facilityId })
+              if(!pickup) {
+                this.packShippingOrders(order, part);
+              } else {
+                this.store.dispatch('order/packShipGroupItems', {order, part, facilityId: this.currentFacility.facilityId})
+              }
             }
           }]
         });
       return alert.present();
+    },
+    async packShippingOrders(currentOrder: any, part: any) {
+      try {
+        const resp = await OrderService.packOrder({
+          'picklistBinId': currentOrder.picklistBinId,
+          'orderId': currentOrder.orderId
+        })
+
+        if(!hasError(resp)) {
+          showToast(translate("Order packed and ready for delivery"));
+          this.store.dispatch("order/updateCurrent", { order: { ...currentOrder, readyToShip: true } }) 
+          this.store.dispatch("order/removeOpenOrder", { order: currentOrder, part })
+        } else {
+          throw resp.data;
+        }
+      } catch(error: any) {
+        logger.error(error);
+        showToast(translate("Something went wrong"))
+      }
     },
     async fetchRejectReasons() {
       await this.store.dispatch('util/fetchRejectReasons');
@@ -404,7 +520,16 @@ export default defineComponent({
     },
     async printShippingLabelAndPackingSlip(order: any) {
       await OrderService.printShippingLabelAndPackingSlip(order.shipmentId)
-    }
+    },
+    async openInventoryDetailPopover(Event: any, item: any){
+      const popover = await popoverController.create({
+        component: InventoryDetailsPopover,
+        event: Event,
+        showBackdrop: false,
+        componentProps: { item }
+      });
+      await popover.present();
+    },
   },
   async mounted() {
     emitter.emit("presentLoader")
@@ -420,6 +545,8 @@ export default defineComponent({
   setup() {
     const store = useStore();
     const router = useRouter();
+    const productIdentificationStore = useProductIdentificationStore();
+    let productIdentificationPref = computed(() => productIdentificationStore.getProductIdentificationPref)
 
     return {
       Actions,
@@ -433,9 +560,15 @@ export default defineComponent({
       closeCircleOutline,
       checkmarkCircleOutline,
       checkmarkOutline,
+      cubeOutline,
+      getProductIdentificationValue,
       giftOutline,
+      getFeature,
       hasPermission,
+      informationCircleOutline,
+      locateOutline,
       printOutline,
+      productIdentificationPref,
       router,
       store,
       timeOutline,
@@ -450,6 +583,13 @@ export default defineComponent({
 <style scoped>
 .border-top {
   border-top: 1px solid #ccc;
+}
+
+ion-card-header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
 }
 
 @media (min-width: 768px) {

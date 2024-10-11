@@ -30,6 +30,9 @@ const getters: GetterTree <UserState, RootState> = {
     showShippingOrders (state) {
         return state.preference.showShippingOrders;
     },
+    printPicklistPref (state) {
+        return state.preference.printPicklistPref;
+    },
     configurePicker (state) {
         return state.preference.configurePicker;
     },
@@ -59,6 +62,9 @@ const getters: GetterTree <UserState, RootState> = {
     },
     getUnreadNotificationsStatus(state) {
         return state.hasUnreadNotifications
+    },
+    getAllNotificationPrefs(state) {
+        return state.allNotificationPrefs
     }
 }
 export default getters;

@@ -151,8 +151,11 @@
           <ion-card-content>
             {{ translate('Track who picked orders by entering picker IDs when packing an order.') }}
           </ion-card-content>
-          <ion-item lines="none">
+          <ion-item>
             <ion-toggle label-placement="start" :checked="configurePicker" @ionChange="setConfigurePickerPreference($event)">{{ translate("Enable tracking") }}</ion-toggle>
+          </ion-item>
+          <ion-item lines="none">
+            <ion-toggle label-placement="start" :checked="printPicklistPref" @ionChange="setPrintPicklistPreference($event)">{{ translate("Print picklists") }}</ion-toggle>
           </ion-item>
         </ion-card>
 
@@ -167,7 +170,7 @@
           </ion-card-content>
           <ion-list>
             <ion-item :key="pref.enumId" v-for="pref in notificationPrefs" lines="none">
-              <ion-toggle label-placement="start" @click="confirmNotificationPrefUpdate(pref.enumId, $event)" :checked="pref.isEnabled">{{ pref.description }}</ion-toggle>
+              <ion-toggle label-placement="start" @click.prevent="confirmNotificationPrefUpdate(pref.enumId, $event)" :checked="pref.isEnabled">{{ pref.description }}</ion-toggle>
             </ion-item>
           </ion-list>
         </ion-card>
@@ -214,9 +217,9 @@ import { DateTime } from 'luxon';
 import { UserService } from '@/services/UserService'
 import { showToast } from '@/utils';
 import { hasError, removeClientRegistrationToken, subscribeTopic, unsubscribeTopic } from '@/adapter'
-import { translate } from "@hotwax/dxp-components";
+import { initialiseFirebaseApp, translate } from "@hotwax/dxp-components";
 import { Actions, hasPermission } from '@/authorization'
-import { generateTopicName } from "@/utils/firebase";
+import { addNotification, generateTopicName, isFcmConfigured, storeClientRegistrationToken } from "@/utils/firebase";
 import emitter from "@/event-bus"
 import logger from '@/logger';
 
@@ -270,7 +273,9 @@ export default defineComponent({
       showPackingSlip: 'user/showPackingSlip',
       partialOrderRejectionConfig: 'user/getPartialOrderRejectionConfig',
       firebaseDeviceId: 'user/getFirebaseDeviceId',
-      notificationPrefs: 'user/getNotificationPrefs'
+      notificationPrefs: 'user/getNotificationPrefs',
+      allNotificationPrefs: 'user/getAllNotificationPrefs',
+      printPicklistPref: "user/printPicklistPref",
     })
   },
   mounted() {
@@ -331,6 +336,9 @@ export default defineComponent({
     },
     setConfigurePickerPreference (ev: any){
       this.store.dispatch('user/setUserPreference', { configurePicker: ev.detail.checked })
+    },
+    setPrintPicklistPreference (ev: any){
+      this.store.dispatch('user/setUserPreference', { printPicklistPref: ev.detail.checked })
     },
     getDateTime(time: any) {
       return DateTime.fromMillis(time).toLocaleString(DateTime.DATETIME_MED);
@@ -416,29 +424,49 @@ export default defineComponent({
       }
       await this.store.dispatch('user/updatePartialOrderRejectionConfig', params)
     },
-    async updateNotificationPref(enumId: string, event: any) {
+    async updateNotificationPref(enumId: string) {
+      let isToggledOn = false;
+
       try {
+        if (!isFcmConfigured()) {
+          logger.error("FCM is not configured.");
+          showToast(translate('Notification preferences not updated. Please try again.'))
+          return;
+        }
+
         emitter.emit('presentLoader',  { backdropDismiss: false })
         const facilityId = (this.currentFacility as any).facilityId
         const topicName = generateTopicName(facilityId, enumId)
-        // event.target.checked returns the initial value (the value that was there before clicking
-        // and updating the toggle). But it returns the updated value on further references (if passed
-        // as a parameter in other function, here in our case, passed from confirmNotificationPrefUpdate)
-        // Hence, event.target.checked here holds the updated value (value after the toggle action)
-        event.target.checked
-          ? await subscribeTopic(topicName, process.env.VUE_APP_NOTIF_APP_ID)
-          : await unsubscribeTopic(topicName, process.env.VUE_APP_NOTIF_APP_ID)
+
+        const notificationPref = this.notificationPrefs.find((pref: any) => pref.enumId === enumId)
+        notificationPref.isEnabled
+          ? await unsubscribeTopic(topicName, process.env.VUE_APP_NOTIF_APP_ID)
+          : await subscribeTopic(topicName, process.env.VUE_APP_NOTIF_APP_ID)
+
+        isToggledOn = !notificationPref.isEnabled
+        notificationPref.isEnabled = !notificationPref.isEnabled
+        await this.store.dispatch('user/updateNotificationPreferences', this.notificationPrefs)
         showToast(translate('Notification preferences updated.'))
       } catch (error) {
-        // reverting the value of toggle as event.target.checked is 
-        // updated on click event, and revert is needed on API fail
-        event.target.checked = !event.target.checked;
         showToast(translate('Notification preferences not updated. Please try again.'))
       } finally {
         emitter.emit("dismissLoader")
       }
+      
+      try {
+        if(!this.allNotificationPrefs.length && isToggledOn) {
+          await initialiseFirebaseApp(JSON.parse(process.env.VUE_APP_FIREBASE_CONFIG), process.env.VUE_APP_FIREBASE_VAPID_KEY, storeClientRegistrationToken, addNotification)
+        } else if(this.allNotificationPrefs.length == 1 && !isToggledOn) {
+          await removeClientRegistrationToken(this.firebaseDeviceId, process.env.VUE_APP_NOTIF_APP_ID)
+        }
+        await this.store.dispatch("user/fetchAllNotificationPrefs");
+      } catch(error) {
+        logger.error(error);
+      }
     },
-    async confirmNotificationPrefUpdate(enumId: string, event: any) {
+    async confirmNotificationPrefUpdate(enumId: string, event: CustomEvent) {
+      event.stopImmediatePropagation();
+
       const message = translate("Are you sure you want to update the notification preferences?");
       const alert = await alertController.create({
         header: translate("Update notification preferences"),
@@ -446,18 +474,14 @@ export default defineComponent({
         buttons: [
           {
             text: translate("Cancel"),
-            handler: () => {
-              // reverting the value of toggle as event.target.checked is 
-              // updated on click event and revert is needed on "Cancel"
-              event.target.checked = !event.target.checked
-            }
+            role: "cancel"
           },
           {
             text: translate("Confirm"),
             handler: async () => {
-              // passing event reference for updation in case the API fails
+              // passing event reference for updation in case the API success
               alertController.dismiss()
-              await this.updateNotificationPref(enumId, event)
+              await this.updateNotificationPref(enumId)
             }
           }
         ],

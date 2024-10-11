@@ -13,9 +13,10 @@ const userModule: Module<UserState, RootState> = {
       currentFacility: {},
       instanceUrl: '',
       preference: {
-        showShippingOrders: true,
+        showShippingOrders: false,
         showPackingSlip: false,
-        configurePicker: false
+        configurePicker: false,
+        printPicklistPref: false
       },
       currentEComStore: {},
       partialOrderRejectionConfig: {},
@@ -23,7 +24,8 @@ const userModule: Module<UserState, RootState> = {
       notifications: [],
       notificationPrefs: [],
       firebaseDeviceId: '',
-      hasUnreadNotifications: true
+      hasUnreadNotifications: true,
+      allNotificationPrefs: []
     },
     getters,
     actions,
